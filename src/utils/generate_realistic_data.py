@@ -1,33 +1,30 @@
 """
-Generate Realistic Synthetic Data with Patterns
+Generate Biologically Accurate Synthetic Data with Clear Drug-Gene Rules
 File: src/utils/generate_realistic_data.py
 
-This creates data with actual biological patterns that ML models can learn
+Aligned with project objectives: clear responder/non-responder logic,
+strong resistance signals, and realistic but learnable patterns.
 """
 
 import pandas as pd
 import numpy as np
 from pathlib import Path
 
-np.random.seed(42)  # For reproducibility
+np.random.seed(42)
 
 
 class RealisticDataGenerator:
     """Generate biologically plausible synthetic drug response data"""
     
-    def __init__(self, n_samples=1000, data_dir='data/raw'):
+    def __init__(self, n_samples=1500, data_dir='data/raw'):
         self.n_samples = n_samples
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
     
     def generate_data(self):
-        """Generate complete dataset with realistic patterns"""
-        print("=== Generating Realistic Drug Response Data ===\n")
+        print("=== Generating Biologically Accurate Drug Response Data ===\n")
         
-        # Initialize data storage
         data = {}
-        
-        # Generate patient IDs
         data['COSMIC_ID'] = np.arange(1000000, 1000000 + self.n_samples)
         
         # === CLINICAL FEATURES ===
@@ -41,137 +38,124 @@ class RealisticDataGenerator:
                                          self.n_samples)
         data['PRIOR_TREATMENT'] = np.random.binomial(1, 0.4, self.n_samples)
         
-        # === GENOMIC FEATURES (with biological relevance) ===
+        # === GENOMIC FEATURES ===
         print("Generating genomic mutations...")
-        
-        # Key cancer genes with realistic mutation rates
         genes_info = {
-            'TP53': 0.50,      # Most commonly mutated
-            'KRAS': 0.25,      # Common in lung/colon
-            'EGFR': 0.20,      # Targetable mutation
-            'BRAF': 0.15,      # MAPK pathway
-            'PIK3CA': 0.30,    # PI3K pathway
-            'PTEN': 0.20,      # Tumor suppressor
-            'APC': 0.18,       # Colon cancer
-            'RB1': 0.12,       # Cell cycle
-            'BRCA1': 0.10,     # DNA repair
-            'BRCA2': 0.08,     # DNA repair
-            'MYC': 0.15,       # Oncogene
-            'NRAS': 0.12,      # RAS pathway
-            'ALK': 0.05,       # Fusion gene
-            'RET': 0.04,       # Targetable
-            'MET': 0.08        # Growth factor receptor
+            'TP53': 0.50, 'KRAS': 0.25, 'EGFR': 0.20, 'BRAF': 0.15,
+            'PIK3CA': 0.30, 'PTEN': 0.20, 'APC': 0.18, 'RB1': 0.12,
+            'BRCA1': 0.10, 'BRCA2': 0.08, 'MYC': 0.15, 'NRAS': 0.12,
+            'ALK': 0.05, 'RET': 0.04, 'MET': 0.08
         }
-        
         for gene, mut_rate in genes_info.items():
             data[f'MUT_{gene}'] = np.random.binomial(1, mut_rate, self.n_samples)
         
-        # === DRUG SELECTION ===
+        # === DRUG ASSIGNMENT ===
         print("Assigning drugs...")
         drugs = ['Erlotinib', 'Gefitinib', 'Vemurafenib', 'Trametinib', 
                 'Pembrolizumab', 'Cisplatin', 'Docetaxel', '5-FU']
         data['DRUG_NAME'] = np.random.choice(drugs, self.n_samples)
         
-        # Convert to DataFrame
         df = pd.DataFrame(data)
         
-        # === CREATE RESPONSE BASED ON BIOLOGICAL RULES ===
-        print("Calculating drug responses based on biology...")
+        # === CREATE RESPONSE WITH STRONG BIOLOGICAL RULES ===
+        print("Calculating drug responses with dominant resistance logic...")
         response_score = np.zeros(self.n_samples)
         
         for i in range(self.n_samples):
             score = 0
+            drug = df.loc[i, 'DRUG_NAME']
             
-            # Rule 1: EGFR inhibitors work with EGFR mutations
-            if df.loc[i, 'DRUG_NAME'] in ['Erlotinib', 'Gefitinib']:
-                if df.loc[i, 'MUT_EGFR'] == 1:
-                    score += 3.0  # Strong positive effect
-                if df.loc[i, 'MUT_KRAS'] == 1:
-                    score -= 2.0  # KRAS mutation = resistance
+            # 🔴 OVERRIDE: Absolute resistance rules (set score very low)
+            resistant = False
             
-            # Rule 2: BRAF inhibitors work with BRAF mutations
-            if df.loc[i, 'DRUG_NAME'] == 'Vemurafenib':
-                if df.loc[i, 'MUT_BRAF'] == 1:
-                    score += 3.5
+            # EGFR inhibitors + KRAS/NRAS = resistance
+            if drug in ['Erlotinib', 'Gefitinib']:
+                if df.loc[i, 'MUT_KRAS'] == 1 or df.loc[i, 'MUT_NRAS'] == 1:
+                    score = -10  # Strong resistance
+                    resistant = True
+            
+            # BRAF inhibitor + NRAS = resistance
+            if drug == 'Vemurafenib':
                 if df.loc[i, 'MUT_NRAS'] == 1:
-                    score -= 1.5  # NRAS = resistance
+                    score = -10
+                    resistant = True
             
-            # Rule 3: MEK inhibitors
-            if df.loc[i, 'DRUG_NAME'] == 'Trametinib':
-                if df.loc[i, 'MUT_KRAS'] == 1 or df.loc[i, 'MUT_BRAF'] == 1:
-                    score += 2.5
-            
-            # Rule 4: Immunotherapy works better with certain profiles
-            if df.loc[i, 'DRUG_NAME'] == 'Pembrolizumab':
-                if df.loc[i, 'MUT_TP53'] == 1:
-                    score += 1.5
-                if df.loc[i, 'TISSUE'] in ['Lung', 'Skin']:
+            # If not resistant, apply positive rules
+            if not resistant:
+                # EGFR inhibitors
+                if drug in ['Erlotinib', 'Gefitinib']:
+                    if df.loc[i, 'MUT_EGFR'] == 1:
+                        score += 4.0  # Strong signal
+                    else:
+                        score -= 2.0  # No target = likely non-responder
+                
+                # BRAF inhibitor
+                elif drug == 'Vemurafenib':
+                    if df.loc[i, 'MUT_BRAF'] == 1:
+                        score += 4.0
+                    else:
+                        score -= 2.0
+                
+                # MEK inhibitor
+                elif drug == 'Trametinib':
+                    if df.loc[i, 'MUT_KRAS'] == 1 or df.loc[i, 'MUT_BRAF'] == 1:
+                        score += 3.0
+                
+                # Immunotherapy
+                elif drug == 'Pembrolizumab':
+                    if df.loc[i, 'TISSUE'] in ['Lung', 'Skin']:
+                        score += 2.0
+                        if df.loc[i, 'MUT_TP53'] == 1:
+                            score += 1.5  # TP53 enhances response in these tissues
+                
+                # Chemo (baseline)
+                elif drug in ['Cisplatin', 'Docetaxel', '5-FU']:
                     score += 1.0
+                    if df.loc[i, 'MUT_TP53'] == 1:
+                        score += 0.8
+                    if df.loc[i, 'PRIOR_TREATMENT'] == 1:
+                        score -= 2.0  # Strong resistance from prior treatment
             
-            # Rule 5: Traditional chemo - less specific but baseline effective
-            if df.loc[i, 'DRUG_NAME'] in ['Cisplatin', 'Docetaxel', '5-FU']:
-                score += 1.0
-                if df.loc[i, 'MUT_TP53'] == 1:
-                    score += 0.8
-                if df.loc[i, 'PRIOR_TREATMENT'] == 1:
-                    score -= 1.5  # Resistance from prior treatment
-            
-            # Rule 6: Clinical factors
+            # Clinical modifiers (weaker)
             if df.loc[i, 'STAGE'] == 'IV':
-                score -= 1.0  # Advanced stage = worse response
+                score -= 1.0
             elif df.loc[i, 'STAGE'] == 'I':
-                score += 0.8  # Early stage = better response
-            
+                score += 0.8
             if df.loc[i, 'AGE'] > 70:
-                score -= 0.5  # Older age = slightly worse
-            
+                score -= 0.5
             if df.loc[i, 'BMI'] < 18.5 or df.loc[i, 'BMI'] > 35:
-                score -= 0.5  # Extreme BMI = worse response
-            
-            # Rule 7: TP53 mutation generally indicates aggressive cancer
-            if df.loc[i, 'MUT_TP53'] == 1:
-                score -= 0.3
-            
-            # Rule 8: PI3K pathway alterations
-            if df.loc[i, 'MUT_PIK3CA'] == 1 or df.loc[i, 'MUT_PTEN'] == 1:
-                score -= 0.4  # Often leads to resistance
+                score -= 0.5
             
             response_score[i] = score
         
-        # Add some random noise (biology is not perfectly predictable)
-        response_score += np.random.normal(0, 0.8, self.n_samples)
+        # 🔬 Reduced noise for clearer learning
+        response_score += np.random.normal(0, 0.3, self.n_samples)  # Was 0.8
         
-        # Convert to binary response (1 = responder, 0 = non-responder)
-        # Use median as threshold for balanced classes
+        # Use median for balanced classes
         threshold = np.median(response_score)
         df['RESPONSE'] = (response_score > threshold).astype(int)
         
-        # Generate IC50 values based on response score
-        # Lower IC50 = more sensitive = responder
-        df['LN_IC50'] = -response_score + np.random.normal(0, 0.5, self.n_samples)
-        df['AUC'] = 1 / (1 + np.exp(response_score)) + np.random.normal(0, 0.1, self.n_samples)
+        # Generate continuous targets (for future regression)
+        df['LN_IC50'] = -response_score + np.random.normal(0, 0.2, self.n_samples)
+        df['AUC'] = 1 / (1 + np.exp(response_score)) + np.random.normal(0, 0.05, self.n_samples)
         df['AUC'] = df['AUC'].clip(0, 1)
         
-        # Print statistics
+        # Print stats
         print(f"\n✓ Generated {self.n_samples} samples")
         print(f"  Responders: {df['RESPONSE'].sum()} ({df['RESPONSE'].mean()*100:.1f}%)")
         print(f"  Non-responders: {(df['RESPONSE']==0).sum()} ({(df['RESPONSE']==0).mean()*100:.1f}%)")
         print(f"  Unique drugs: {df['DRUG_NAME'].nunique()}")
         print(f"  Features: {len(df.columns)}")
         
-        # Save data
+        # Save
         output_file = self.data_dir / 'drug_response_realistic.csv'
         df.to_csv(output_file, index=False)
         print(f"\n✓ Saved: {output_file}")
         
-        # Create cell line and drug info files
         self._create_supplementary_files(df)
-        
         return df
     
     def _create_supplementary_files(self, df):
-        """Create cell line and drug information files"""
-        
         # Cell line info
         cell_data = df[['COSMIC_ID', 'TISSUE', 'STAGE']].drop_duplicates()
         cell_data['CELL_LINE_NAME'] = [f"CELL_{i}" for i in range(len(cell_data))]
@@ -204,12 +188,11 @@ class RealisticDataGenerator:
 
 
 def main():
-    """Main execution"""
     generator = RealisticDataGenerator(n_samples=1500)
     df = generator.generate_data()
     
     print("\n" + "="*60)
-    print("✓ REALISTIC DATA GENERATION COMPLETE!")
+    print("✓ BIOLOGICALLY ACCURATE DATA GENERATION COMPLETE!")
     print("="*60)
     print("\nNext steps:")
     print("1. Run: python src/preprocessing/preprocess_data.py")
