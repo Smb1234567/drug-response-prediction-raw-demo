@@ -1,9 +1,6 @@
 """
-Drug Response Prediction Dashboard – Project Heisenberg
+Drug Response Prediction Dashboard – Project Heisenberg (with SHAP & Dual Output)
 File: dashboard/app.py
-Run with: streamlit run dashboard/app.py
-
-Developed by: Heisenberg
 """
 
 import streamlit as st
@@ -15,7 +12,12 @@ from pathlib import Path
 import plotly.express as px
 import plotly.graph_objects as go
 
-# Page configuration
+SHAP_AVAILABLE = True
+try:
+    import shap
+except ImportError:
+    SHAP_AVAILABLE = False
+
 st.set_page_config(
     page_title="Project Heisenberg: Drug Response Prediction",
     page_icon="🧪",
@@ -23,62 +25,20 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS with Heisenberg theme
 st.markdown("""
 <style>
-    .main-header {
-        font-size: 3rem;
-        color: #2c3e50;
-        text-align: center;
-        margin-bottom: 2rem;
-        text-shadow: 1px 1px 2px rgba(0,0,0,0.1);
-    }
-    .heisenberg-tag {
-        text-align: center;
-        color: #e74c3c;
-        font-weight: bold;
-        margin-bottom: 1.5rem;
-        font-size: 1.2rem;
-    }
-    .metric-card {
-        background-color: #f8f9fa;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        border-left: 4px solid #3498db;
-    }
-    .prediction-box {
-        padding: 2rem;
-        border-radius: 1rem;
-        text-align: center;
-        font-size: 1.5rem;
-        font-weight: bold;
-    }
-    .responder {
-        background-color: #d4edda;
-        color: #155724;
-        border: 2px solid #c3e6cb;
-    }
-    .non-responder {
-        background-color: #f8d7da;
-        color: #721c24;
-        border: 2px solid #f5c6cb;
-    }
-    .footer-quote {
-        font-style: italic;
-        font-weight: bold;
-        color: #2c3e50;
-        text-align: center;
-        margin-top: 2rem;
-        padding: 1rem;
-        border-top: 2px solid #bdc3c7;
-    }
+    .main-header { font-size: 3rem; color: #2c3e50; text-align: center; margin-bottom: 2rem; }
+    .heisenberg-tag { text-align: center; color: #e74c3c; font-weight: bold; margin-bottom: 1.5rem; font-size: 1.2rem; }
+    .prediction-box { padding: 2rem; border-radius: 1rem; text-align: center; font-size: 1.5rem; font-weight: bold; }
+    .responder { background-color: #d4edda; color: #155724; border: 2px solid #c3e6cb; }
+    .non-responder { background-color: #f8d7da; color: #721c24; border: 2px solid #f5c6cb; }
+    .ic50-box { background-color: #e3f2fd; color: #0d47a1; border: 2px solid #bbdefb; }
+    .footer-quote { font-style: italic; font-weight: bold; color: #2c3e50; text-align: center; margin-top: 2rem; padding: 1rem; border-top: 2px solid #bdc3c7; }
 </style>
 """, unsafe_allow_html=True)
 
 
 class DrugResponsePredictor:
-    """Drug response prediction system – Project Heisenberg"""
-    
     def __init__(self, models_dir='models', data_dir='data/processed'):
         self.models_dir = Path(models_dir)
         self.data_dir = Path(data_dir)
@@ -89,14 +49,25 @@ class DrugResponsePredictor:
             with open(self.models_dir / 'best_model_info.json', 'r') as f:
                 self.model_info = json.load(f)
             
-            best_model_name = self.model_info['best_model']
-            model_filename = f"{best_model_name.replace(' ', '_').lower()}_model.pkl"
-            self.model = joblib.load(self.models_dir / model_filename)
+            # Load classification model
+            best_class = self.model_info['best_classification_model']
+            self.class_model = joblib.load(self.models_dir / f"{best_class.lower()}_model.pkl")
+            
+            # Load regression model
+            best_reg = self.model_info['best_regression_model']
+            self.reg_model = joblib.load(self.models_dir / f"{best_reg.lower()}_model.pkl")
             
             X_test = pd.read_csv(self.data_dir / 'X_test.csv')
             self.feature_names = X_test.columns.tolist()
             
-            self.comparison_df = pd.read_csv(self.models_dir / 'model_comparison.csv')
+            # Load SHAP explainer
+            self.explainer = None
+            if SHAP_AVAILABLE:
+                try:
+                    self.explainer = joblib.load(self.models_dir / "shap_explainer.pkl")
+                except:
+                    self.explainer = None
+            
             self.loaded = True
         except Exception as e:
             st.error(f"Error loading models: {str(e)}")
@@ -104,7 +75,6 @@ class DrugResponsePredictor:
     
     def _create_encoded_features(self, input_data):
         encoded_input = {feat: 0.0 for feat in self.feature_names}
-        
         encoded_input['AGE'] = float(input_data['AGE'])
         encoded_input['BMI'] = float(input_data['BMI'])
         encoded_input['PRIOR_TREATMENT'] = float(input_data['PRIOR_TREATMENT'])
@@ -128,16 +98,35 @@ class DrugResponsePredictor:
         if drug_col in encoded_input:
             encoded_input[drug_col] = 1.0
         
+        # Add dummy fingerprint features (in real system, compute from SMILES)
+        for i in range(128):
+            fp_col = f"DRUG_FP_{i}"
+            if fp_col in encoded_input:
+                encoded_input[fp_col] = 0.0  # Placeholder
+        
         return encoded_input
     
-    def predict(self, input_data):
+    def predict_with_shap(self, input_data):
         encoded_input = self._create_encoded_features(input_data)
         input_df = pd.DataFrame([encoded_input])
         input_df = input_df[self.feature_names]
         
-        prediction = self.model.predict(input_df)[0]
-        probability = self.model.predict_proba(input_df)[0]
-        return prediction, probability
+        # Classification prediction
+        class_pred = self.class_model.predict(input_df)[0]
+        class_proba = self.class_model.predict_proba(input_df)[0]
+        
+        # Regression prediction (IC50)
+        ic50_pred = self.reg_model.predict(input_df)[0]
+        
+        # SHAP values
+        shap_values = None
+        if self.explainer is not None:
+            shap_values = self.explainer.shap_values(input_df)
+            if isinstance(shap_values, list):
+                shap_values = shap_values[1]
+            shap_values = shap_values[0]
+        
+        return class_pred, class_proba, ic50_pred, shap_values
 
 
 def main():
@@ -158,13 +147,13 @@ def main():
         col1, col2, col3 = st.columns(3)
         with col1:
             st.info("**🎯 Accuracy**")
-            st.metric("Best Model", f"{predictor.model_info['best_accuracy']*100:.2f}%", predictor.model_info['best_model'])
+            st.metric("Best Classifier", f"{predictor.model_info['best_classification_accuracy']*100:.2f}%", "Classification")
         with col2:
             st.info("**🧬 Features**")
             st.metric("Genomic + Clinical", len(predictor.feature_names), "Input Features")
         with col3:
-            st.info("**🏆 Algorithm**")
-            st.metric("Top Performer", predictor.model_info['best_model'], "Selected")
+            st.info("**📉 IC50 R²**")
+            st.metric("Best Regressor", f"{predictor.model_info['best_regression_r2']:.4f}", "Regression")
         
         st.markdown("---")
         st.header("📋 About Project Heisenberg")
@@ -175,7 +164,8 @@ def main():
         This system predicts drug response using:
         - **Genomic mutations** (TP53, KRAS, EGFR, etc.)
         - **Clinical parameters** (Age, BMI, Stage)
-        - **Drug selection** (Targeted therapies & chemotherapies)
+        - **Drug molecular fingerprints** (Morgan fingerprints)
+        - **Dual Output**: Responder classification + IC50 regression
 
         Built with precision. Engineered for accuracy.  
         **Say my name.**
@@ -229,14 +219,14 @@ def main():
             }
             
             with st.spinner("🔄 Analyzing genomic signature..."):
-                prediction, probability = predictor.predict(input_data)
+                class_pred, class_proba, ic50_pred, shap_vals = predictor.predict_with_shap(input_data)
             
             st.markdown("---")
-            st.header("📊 Prediction Result")
+            st.header("📊 Prediction Results")
             
-            col1, col2 = st.columns([2, 1])
+            col1, col2, col3 = st.columns(3)
             with col1:
-                if prediction == 1:
+                if class_pred == 1:
                     st.markdown(
                         '<div class="prediction-box responder">✅ RESPONDER<br/>Treatment likely effective</div>',
                         unsafe_allow_html=True
@@ -247,36 +237,74 @@ def main():
                         unsafe_allow_html=True
                     )
             with col2:
-                st.metric("Confidence", f"{max(probability)*100:.1f}%", "Probability")
+                st.metric("Confidence", f"{max(class_proba)*100:.1f}%", "Probability")
+            with col3:
+                st.markdown(
+                    f'<div class="prediction-box ic50-box">🔬 IC50<br/>{ic50_pred:.2f} μM</div>',
+                    unsafe_allow_html=True
+                )
             
             st.subheader("📈 Response Probability")
             fig = go.Figure(data=[
-                go.Bar(x=['Non-Responder', 'Responder'], y=probability,
+                go.Bar(x=['Non-Responder', 'Responder'], y=class_proba,
                       marker_color=['#e74c3c', '#2ecc71'])
             ])
             fig.update_layout(title="Class Probabilities", yaxis_title="Probability", height=300)
             st.plotly_chart(fig, use_container_width=True)
+            
+            if shap_vals is not None:
+                st.markdown("---")
+                st.subheader("🔍 Why This Prediction? (SHAP Explainability)")
+                st.write("Features pushing the prediction toward **Responder (🔴)** or **Non-Responder (🔵)**")
+                
+                shap_df = pd.DataFrame({
+                    'feature': predictor.feature_names,
+                    'shap_value': shap_vals
+                }).sort_values('shap_value', key=abs, ascending=False)
+                
+                top_shap = shap_df.head(10)
+                fig_shap = px.bar(
+                    top_shap,
+                    x='shap_value',
+                    y='feature',
+                    orientation='h',
+                    color='shap_value',
+                    color_continuous_scale='RdBu',
+                    title="Top 10 Features Influencing Prediction"
+                )
+                fig_shap.update_layout(height=500)
+                st.plotly_chart(fig_shap, use_container_width=True)
     
     elif page == "📊 Model Performance":
         st.header("📊 Model Performance – Precision Engineered")
-        styled_df = predictor.comparison_df.style.background_gradient(
-            subset=['Accuracy', 'Precision', 'Recall', 'F1-Score', 'ROC-AUC'],
-            cmap='RdYlGn'
-        ).format({
-            'Accuracy': '{:.4f}',
-            'Precision': '{:.4f}',
-            'Recall': '{:.4f}',
-            'F1-Score': '{:.4f}',
-            'ROC-AUC': '{:.4f}',
-            'Time(s)': '{:.2f}'
-        })
-        st.dataframe(styled_df, use_container_width=True)
         
-        best = predictor.comparison_df.iloc[0]
-        col1, col2, col3 = st.columns(3)
-        with col1: st.metric("🥇 Best Model", best['Model'])
-        with col2: st.metric("Accuracy", f"{best['Accuracy']:.4f}")
-        with col3: st.metric("ROC-AUC", f"{best['ROC-AUC']:.4f}")
+        # Classification results
+        try:
+            class_df = pd.read_csv(predictor.models_dir / 'classification_comparison.csv')
+            st.subheader("Classification Models")
+            st.dataframe(class_df.style.background_gradient(
+                subset=['Accuracy', 'ROC-AUC'], cmap='RdYlGn'
+            ).format({
+                'Accuracy': '{:.4f}',
+                'ROC-AUC': '{:.4f}',
+                'Time(s)': '{:.2f}'
+            }), use_container_width=True)
+        except:
+            st.warning("Classification results not found")
+        
+        # Regression results
+        try:
+            reg_df = pd.read_csv(predictor.models_dir / 'regression_comparison.csv')
+            st.subheader("Regression Models (IC50 Prediction)")
+            st.dataframe(reg_df.style.background_gradient(
+                subset=['R2'], cmap='RdYlGn'
+            ).format({
+                'R2': '{:.4f}',
+                'MSE': '{:.4f}',
+                'Time(s)': '{:.2f}'
+            }), use_container_width=True)
+        except:
+            st.warning("Regression results not found")
     
     elif page == "📈 Analytics":
         st.header("📈 System Analytics")
@@ -301,7 +329,6 @@ def main():
         except Exception as e:
             st.error(f"Error loading analytics: {str(e)}")
     
-    # === HEISENBERG FOOTER ===
     st.markdown("""
     <div class="footer-quote">
         "I did it for me. I liked it. I was good at it. And I was really... I was alive."<br>

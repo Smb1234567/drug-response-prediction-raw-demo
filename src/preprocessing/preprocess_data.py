@@ -1,8 +1,6 @@
 """
 Preprocessing Pipeline for Drug Response Prediction
 File: src/preprocessing/preprocess_data.py
-
-This version properly handles categorical encoding using ColumnTransformer
 """
 
 import pandas as pd
@@ -11,12 +9,9 @@ from pathlib import Path
 from sklearn.model_selection import train_test_split
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
-from sklearn.impute import SimpleImputer
 import joblib
 
 class DrugResponsePreprocessor:
-    """Preprocess drug response data with proper categorical handling"""
-    
     def __init__(self, raw_data_path='data/raw/drug_response_realistic.csv',
                  processed_data_dir='data/processed'):
         self.raw_data_path = Path(raw_data_path)
@@ -25,56 +20,52 @@ class DrugResponsePreprocessor:
         self.preprocessor = None
         
     def load_and_prepare_data(self):
-        """Load raw data and separate features/target"""
         print("=== Loading Raw Data ===")
         df = pd.read_csv(self.raw_data_path)
         print(f"✓ Loaded {len(df)} samples with {len(df.columns)} columns")
         
-        # Separate target
-        if 'RESPONSE' not in df.columns:
-            raise ValueError("RESPONSE column not found in data")
-            
-        X = df.drop(['RESPONSE', 'COSMIC_ID', 'LN_IC50', 'AUC'], axis=1, errors='ignore')
-        y = df['RESPONSE']
+        # Separate targets
+        X = df.drop(['RESPONSE', 'COSMIC_ID', 'LN_IC50', 'AUC', 'SMILES'], axis=1, errors='ignore')
+        y_class = df['RESPONSE']
+        y_reg = df['LN_IC50']
         
-        print(f"✓ Features: {X.shape[1]}, Target: RESPONSE")
-        return X, y
+        print(f"✓ Features: {X.shape[1]}")
+        return X, y_class, y_reg
     
     def create_preprocessor(self, X):
-        """Create preprocessor with proper column handling"""
-        # Identify column types
         categorical_cols = []
         numerical_cols = []
+        fingerprint_cols = []
         
         for col in X.columns:
-            if col.startswith('MUT_'):
-                # Mutation columns are already binary 0/1
-                continue
+            if col.startswith('DRUG_FP_'):
+                fingerprint_cols.append(col)
+            elif col.startswith('MUT_'):
+                continue  # Already binary
             elif X[col].dtype == 'object':
                 categorical_cols.append(col)
             else:
                 numerical_cols.append(col)
         
-        print(f"  Categorical features: {len(categorical_cols)} {categorical_cols}")
-        print(f"  Numerical features: {len(numerical_cols)} {numerical_cols}")
-        print(f"  Binary mutation features: {len([c for c in X.columns if c.startswith('MUT_')])}")
+        print(f"  Categorical: {len(categorical_cols)}")
+        print(f"  Numerical: {len(numerical_cols)}")
+        print(f"  Fingerprints: {len(fingerprint_cols)}")
+        print(f"  Binary mutations: {len([c for c in X.columns if c.startswith('MUT_')])}")
         
-        # Create preprocessor
         self.preprocessor = ColumnTransformer(
             transformers=[
                 ('num', StandardScaler(), numerical_cols),
-                ('cat', OneHotEncoder(drop='first', handle_unknown='ignore'), categorical_cols)
+                ('cat', OneHotEncoder(drop='first', handle_unknown='ignore'), categorical_cols),
+                ('fp', 'passthrough', fingerprint_cols)
             ],
-            remainder='passthrough'  # Keeps mutation columns unchanged
+            remainder='passthrough'  # For mutation columns
         )
-        
         return self.preprocessor
     
-    def split_and_preprocess(self, X, y, test_size=0.2, random_state=42):
-        """Split data and apply preprocessing"""
+    def split_and_preprocess(self, X, y_class, y_reg, test_size=0.2, random_state=42):
         print("\n=== Splitting Data ===")
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=test_size, random_state=random_state, stratify=y
+        X_train, X_test, y_train_class, y_test_class, y_train_reg, y_test_reg = train_test_split(
+            X, y_class, y_reg, test_size=test_size, random_state=random_state, stratify=y_class
         )
         print(f"✓ Train: {len(X_train)}, Test: {len(X_test)}")
         
@@ -85,16 +76,8 @@ class DrugResponsePreprocessor:
         X_train_processed = preprocessor.fit_transform(X_train)
         X_test_processed = preprocessor.transform(X_test)
         
-        # Convert to DataFrames to preserve feature names (optional but helpful)
-        feature_names = (
-            list(preprocessor.named_transformers_['num'].get_feature_names_out() 
-                 if hasattr(preprocessor.named_transformers_['num'], 'get_feature_names_out') 
-                 else numerical_cols) +
-            list(preprocessor.named_transformers_['cat'].get_feature_names_out()) +
-            [col for col in X_train.columns if col.startswith('MUT_')]
-        )
-        
-        # Handle case where there might be no numerical or categorical features
+        # Reconstruct feature names
+        num_names = numerical_cols if 'numerical_cols' in locals() else []
         try:
             num_names = preprocessor.named_transformers_['num'].get_feature_names_out()
         except:
@@ -105,50 +88,39 @@ class DrugResponsePreprocessor:
         except:
             cat_names = []
             
+        fp_names = [col for col in X_train.columns if col.startswith('DRUG_FP_')]
         mut_names = [col for col in X_train.columns if col.startswith('MUT_')]
-        all_feature_names = list(num_names) + list(cat_names) + mut_names
+        all_feature_names = list(num_names) + list(cat_names) + fp_names + mut_names
         
         X_train_df = pd.DataFrame(X_train_processed, columns=all_feature_names[:X_train_processed.shape[1]])
         X_test_df = pd.DataFrame(X_test_processed, columns=all_feature_names[:X_test_processed.shape[1]])
         
-        return X_train_df, X_test_df, y_train, y_test
+        return X_train_df, X_test_df, y_train_class, y_test_class, y_train_reg, y_test_reg
     
-    def save_processed_data(self, X_train, X_test, y_train, y_test):
-        """Save processed data to files"""
+    def save_processed_data(self, X_train, X_test, y_train_class, y_test_class, y_train_reg, y_test_reg):
         print("\n=== Saving Processed Data ===")
-        
         X_train.to_csv(self.processed_data_dir / 'X_train.csv', index=False)
         X_test.to_csv(self.processed_data_dir / 'X_test.csv', index=False)
-        pd.DataFrame(y_train, columns=['RESPONSE']).to_csv(
-            self.processed_data_dir / 'y_class_train.csv', index=False)
-        pd.DataFrame(y_test, columns=['RESPONSE']).to_csv(
-            self.processed_data_dir / 'y_class_test.csv', index=False)
-        
-        # Save preprocessor for future use
+        pd.DataFrame(y_train_class, columns=['RESPONSE']).to_csv(self.processed_data_dir / 'y_class_train.csv', index=False)
+        pd.DataFrame(y_test_class, columns=['RESPONSE']).to_csv(self.processed_data_dir / 'y_class_test.csv', index=False)
+        pd.DataFrame(y_train_reg, columns=['LN_IC50']).to_csv(self.processed_data_dir / 'y_reg_train.csv', index=False)
+        pd.DataFrame(y_test_reg, columns=['LN_IC50']).to_csv(self.processed_data_dir / 'y_reg_test.csv', index=False)
         joblib.dump(self.preprocessor, self.processed_data_dir / 'preprocessor.pkl')
-        
         print(f"✓ Saved processed data to {self.processed_data_dir}")
-        print(f"✓ Final feature count: {X_train.shape[1]}")
     
     def run_pipeline(self):
-        """Run complete preprocessing pipeline"""
-        X, y = self.load_and_prepare_data()
-        X_train, X_test, y_train, y_test = self.split_and_preprocess(X, y)
-        self.save_processed_data(X_train, X_test, y_train, y_test)
-        return X_train, X_test, y_train, y_test
+        X, y_class, y_reg = self.load_and_prepare_data()
+        X_train, X_test, y_train_class, y_test_class, y_train_reg, y_test_reg = self.split_and_preprocess(X, y_class, y_reg)
+        self.save_processed_data(X_train, X_test, y_train_class, y_test_class, y_train_reg, y_test_reg)
+        return X_train, X_test, y_train_class, y_test_class, y_train_reg, y_test_reg
 
 
 def main():
-    """Main execution"""
     preprocessor = DrugResponsePreprocessor()
     preprocessor.run_pipeline()
-    
     print("\n" + "="*60)
     print("✓ PREPROCESSING COMPLETE!")
     print("="*60)
-    print("\nNext steps:")
-    print("1. Run: python src/modeling/train_models.py")
-    print("2. Run: streamlit run dashboard/app.py")
 
 
 if __name__ == "__main__":
