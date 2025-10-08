@@ -1,0 +1,46 @@
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+python_env/
+pip-log.txt
+pip-delete-this-directory.txt
+.pytest_cache
+.coverage
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
+# Virtual Environment
+.env
+.venv
+venv/
+env/
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Data & Models (optional: only if you don't want to upload large files)
+data/raw/
+data/processed/
+models/
+logs/
+notebooks/*.ipynb
+!notebooks/README.md  # Allow README if exists
+
+# Outputs
+dashboard/__pycache__/
+
+# OS
+.DS_Store
+Thumbs.db
